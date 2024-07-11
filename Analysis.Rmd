@@ -1,0 +1,420 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+#Analysis
+
+```{r}
+library(RRtools)
+library(adegenet)
+library(readr)
+library(SNPRelate)
+
+
+#LEA
+library(LEA)
+library(ggplot2)
+library(tidyverse)
+library(scatterpie)
+library(patchwork)
+library(cowplot)
+
+
+
+
+
+
+source("/Users/61487/Documents/IBE analysis/IBD_analysis/functions.R")
+library(conStruct)
+```
+
+```{r}
+# load in and filter data how you please.
+species   <- "GrevBuxi"
+dataset   <- "DGr21-5828"
+
+RandR_raw <- "/Users/61487/Documents/GrevBuxi_complex/raw/"
+basedir   <- "/Users/61487/Documents/GrevBuxi_complex/"
+
+
+
+d1        <- read_dart_onerow_csv(RandR_raw,species,dataset, seq2fa=FALSE, fnum=2)
+
+
+qc1       <- report_dart_qc_stats(d1, basedir, species, dataset, threshold_missing_loci = 0.3)
+
+
+d2        <- remove.poor.quality.snps(d1, min_repro=0.96, max_missing=0.2)
+qc2       <- report_dart_qc_stats(d2, basedir, species, dataset)
+
+d3        <- sample.one.snp.per.locus.random(d2, seed=12345) 
+qc3       <- report_dart_qc_stats(d3, basedir, species, dataset)
+
+
+v         <- "v0002"
+m1        <- read_meta_info(d1, basedir, species, dataset, version=v)
+
+dm        <- merge_gt_meta_data(d1, m1)
+
+setdiff( d1$sample_names, m1$sample_names)
+
+dmv       <- arrange_data_by_analysis_field(dm, "RR2", basedir, species, dataset)
+
+dmv2        <- remove.poor.quality.snps(dmv, min_repro=0.96, max_missing=0.1)
+qmv2       <- report_dart_qc_stats(dmv2, basedir, species, dataset)
+
+dmv3        <- sample.one.snp.per.locus.random(dmv2, seed=12345) 
+qmv3       <- report_dart_qc_stats(dmv3, basedir, species, dataset)
+
+```
+
+```{r}
+# run kin
+iIBD      <- individual.pw.IBD(dmv3,basedir,species,dataset)
+kin       <-  iIBD$kinship
+
+rownames(kin) <- rownames(dmv3$gt)
+colnames(kin) <- rownames(dmv3$gt)
+
+image(kin)
+
+plot(kin)
+
+
+```
+
+
+
+
+
+```{r}
+# run allelic richness and Fis
+gp_fil <- dart2genepop(dmv3,basedir,species,dataset, pop=dmv3$meta$analyses$RR1,maf_val=0.1)
+gp_out <- run_diveRsity(gp_fil)
+```
+
+```{r}
+# run a pca
+gl_file    <- dart2gl(dmv3, basedir, species, dataset, return_as_file=TRUE)
+run_PCA(gl_file, basedir, species, dataset, dmv3$treatment)
+```
+
+
+
+```{r}
+# run sNMF
+lea_file <- dart2lea(dmv3, basedir, species, dataset)
+run_SNMF_10(lea_file, basedir, species, dataset, dmv3$treatment)
+plot_SNMF(basedir, species, dataset, dmv3$treatment)
+```
+
+```{r}
+
+snapp_CallCitr <- dart2snapp(dmv3, basedir, species, dataset, add_pop=TRUE, dmv3$meta$analyses$Species_LEA)
+
+
+```
+
+
+```{r}
+snmf_project <- load.snmfProject(paste0(basedir, species,"/popgen/", dmv3$treatment,"/lea/GrevBuxi_DGr21-5828.snmfProject"))
+
+
+scatterpie_plots <- list()
+admix_bar_plots <- list()
+admix_bar_plots_mini <- list()
+map_mini <- list()
+
+dmv_DF <- cbind(dmv3$meta$sample, dmv3$meta$analyses$RR1, dmv3$meta$lat, dmv3$meta$long, dmv3$meta$analyses$Species_LEA)
+  colnames(dmv_DF) <- c("sample","site","lat","long","species_id")
+  
+  
+filtered_site_summary <- dmv_DF %>% as.data.frame()%>%
+  group_by(site) %>%
+  summarize(n_filtered = sum(n()),
+            lat = mean(as.numeric(lat), na.rm=TRUE),
+            long = mean(as.numeric(long),na.rm=TRUE),
+            .groups = 'drop') %>%
+  as.data.frame()
+
+divxlims <- c(min(filtered_site_summary$long, na.rm=TRUE)-0.1,
+              max(filtered_site_summary$long, na.rm=TRUE)+0.1) #find the min / max longitude
+divylims <- c(min(filtered_site_summary$lat, na.rm=TRUE)-0.1,
+              max(filtered_site_summary$lat, na.rm=TRUE)+0.1)
+
+#base_map <- ggplot(ozmaps::abs_ste) + geom_sf(fill="grey96", colour="grey28") +
+#  coord_sf(xlim = divxlims, ylim = divylims) + labs(y=element_blank(), x=element_blank())+
+#  theme(axis.text.x = element_text(angle=90, size=6),axis.text.y=element_text(size=6))
+ibra <- st_read("/Users/61487/Documents/GrevBuxi_complex/IBRA_V7_Subregions/Interim_Biogeographic_Regionalisation_for_Australia_(IBRA)_Version_7_(Subregions).shp")
+
+    pal_color <- c("#DD8D29","#BDC881","#B40F20","#C6CDF7","#E2D200","#46ACC8", "pink","grey40","lightgrey", "grey25")
+    basemap <- ggplot() +
+      geom_sf(data = ozmaps::abs_ste, colour="lightgrey") +
+      geom_sf(data = ibra[ibra$SUB_NAME_7=="Cumberland",], size = 1.5, fill= "grey", color = "black")+
+        theme_bw() +
+    theme(axis.text.x = element_text(angle=90, size=6),axis.text.y=element_text(size=6)) +
+      coord_sf(xlim = divxlims, ylim = divylims)
+```
+
+
+```{r}
+#kval <-3
+#kvalrange <- 3
+kvalrange <- 2:4
+#for each k value
+for (kval in kvalrange){
+  ce           <- cross.entropy(snmf_project, K = kval)
+  Rbest        <- which.min(ce) # with the lowest cross entropy criterion
+  
+  qdf <- Q(snmf_project, K=kval, run=Rbest) # get admixture coefficients (Q) for each sample
+  qdf2 <- as.data.frame(qdf)#, samples=dms_no_n1_sites$sample_names) # add the metadata
+  qdf2$sample <- as.vector(dmv3$sample_names)
+  
+  qdf3  <- merge(qdf2, dmv_DF, by="sample", all.x=TRUE, all.y=FALSE)
+  
+  qdf4 <- qdf3
+  
+  qdf4$sample <- NULL
+  qdf4$species_id <- NULL
+  
+  for (i in 1:kval){
+    qdf4[,i] <- as.numeric(qdf4[,i])
+  }
+  qdf4[,"lat"] <- as.numeric(qdf4[,"lat"])
+  qdf4[,"long"] <- as.numeric(qdf4[,"long"])
+  
+  agg_qdf <- aggregate(. ~ site, data = qdf4, FUN = mean)
+  
+  #scatter_map <- base_map + labs(fill="Source\npopulation")+
+  #geom_scatterpie(mapping=aes(x=long, y=lat, group =site, r = diff(divxlims)/30),data =agg_qdf,
+  #                  cols=colnames(agg_qdf)[2:(kval+1)],  alpha=1, size=0.1, colour="black", na.rm=TRUE)+
+  #  labs(title=paste("K = ",kval))+theme(legend.position="none")
+  
+scatter_map <- basemap +
+   geom_scatterpie(mapping=aes(x=long, y=lat, group =site, r = diff(divxlims)/30),data =agg_qdf,
+                    cols=colnames(agg_qdf)[2:(kval+1)], alpha=1, size=0.1, colour="black",  na.rm=TRUE) +
+  scale_fill_manual(values = pal_color) +
+  coord_sf(xlim = divxlims, ylim = divylims) +
+   theme_bw() +
+    theme(axis.text.x = element_text(angle=90, size=6),axis.text.y=element_text(size=6))  +
+      labs(title=paste("K = ",kval))+theme(legend.position="none")
+  
+  # make admix plot
+  qdf_long <- pivot_longer(qdf3, cols=2:(kval+1), names_to="population", values_to="Q") 
+  
+#qdf_long <- qdf_long %>%
+#  group_by(species_id) %>%
+#  dplyr::arrange(site)
+
+plots<- list()
+sp_num <- list()
+  for (sp in unique(qdf_long$species_id)){
+sp_plot <- 
+  ggplot(qdf_long[qdf_long$species_id==sp,], aes(x=sample, y=Q, fill=population,))+
+    geom_bar(position="stack", stat="identity")+
+    labs(y="Admixture\ncoefficient (Q)")+
+   facet_grid(~factor(site), scales = "free_x", space = "free_x") +
+    theme(axis.text.x = element_text(vjust = 0.5, angle = 90, hjust = 1, size=3),
+          strip.text.x = element_text(size = 6, angle = 90, hjust=0), strip.background = element_blank(),
+          axis.title.y = element_text(size=8),
+          plot.title = element_text(hjust = 0.5, size = 12),
+          axis.title.x=element_blank(),
+          legend.position="none",
+          panel.background = element_blank())+
+    scale_y_continuous(limits = c(0,1.001), expand=c(0,0))+
+  scale_fill_manual(values = pal_color) +
+    theme(strip.text.x = element_text(size=6), panel.spacing = unit(0.07, "lines")) #+
+   # labs(title=paste("K = ",kval))
+plots[[sp]] <- sp_plot
+
+species_sample <- qdf_long[qdf_long$species_id==sp,]
+  secies_dist <-  n_distinct(species_sample$sample) 
+sp_num[[sp]] <- secies_dist
+ }
+
+admix_plot <- 
+  plot_grid(plots[[1]],
+          plots[[3]] + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.title.y = element_blank() ), 
+          plots[[2]] + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.title.y = element_blank() ),
+          labels = c(names(sp_num[1]),names(sp_num[3]),names(sp_num[2])),
+          label_size = 8,
+          label_x = c(0.05,0.01,0.01),
+          hjust = 0,
+          nrow=1,
+          rel_widths=c(sp_num[[1]],sp_num[[3]],sp_num[[2]]),
+          align='h')
+
+  scatterpie_plots[[kval]] <- scatter_map
+  admix_bar_plots[[kval]] <- admix_plot
+
+}
+
+arranged_scatterpie_plots <- scatterpie_plots[kvalrange]  # Subtract 1 because indexing is 0-based
+arranged_scatterpie_plots <- wrap_plots(arranged_scatterpie_plots, ncol = 3, nrow=2)  # Change the number of columns as desired
+ggsave(paste0(basedir,species,"/popgen/",dmv3$treatment,"/lea/plots/LEA_scatterpie_map.pdf"), device="pdf",
+       plot = arranged_scatterpie_plots, width = 20, height = 17, units = "cm")
+
+
+arranged_admix_plots <- admix_bar_plots[kvalrange]  # Subtract 1 because indexing is 0-based
+arranged_admix_plots <- wrap_plots(arranged_admix_plots, ncol = 1, nrow=3) # Change the number of columns as desired
+ggsave(paste0(basedir,species,"/popgen/",dmv3$treatment,"/lea/plots/LEA_barplots.pdf"), device="pdf",
+       plot = arranged_admix_plots, width = 30, height = 25, units = "cm")
+
+
+
+ #all_snmf<- wrap_plots(arranged_scatterpie_plots, arranged_admix_plots, ncol=1, nrow=2)
+ #ggsave(paste0(basedir,species,"/popgen/",dmv3$treatment,"/lea/plots/all_snmf.pdf"), device="pdf", plot = arranged_admix_plots, width = 100, height = 100, units = "cm")
+
+
+```
+
+
+# Plotting PCA
+```{r}
+load(paste0(basedir, species,"/popgen/", dmv3$treatment,"/genlight/GrevBuxi_DGr21-5828_PCA.rda"))
+
+pc <- cbind(gl_pca$scores[,1], gl_pca$scores[,2], gl_pca$scores[,3])
+pc <- as.data.frame(pc)
+pc$sample <- rownames(pc)
+rownames(pc) <- NULL
+names(pc)[1]<-paste("PC1")
+names(pc)[2]<-paste("PC2")
+names(pc)[3]<-paste("PC3")
+
+
+dmv_DF <- cbind(dmv3$meta$sample, dmv3$meta$analyses$RR1, dmv3$meta$lat, dmv3$meta$long, dmv3$meta$analyses$Species_LEA, dmv3$meta$analyses$Lineage_DG20.5163)
+  colnames(dmv_DF) <- c("sample","site","lat","long","species_id", "lineage")
+
+
+PCA_data <- merge(pc, dmv_DF, by= "sample")
+
+PCA_data$lineage[PCA_data$lineage == "na"] <- NA
+
+
+
+eig_1 <- format(gl_pca$eig[1], digits=3)
+eig_2 <- format(gl_pca$eig[2], digits=3)
+eig_3 <- format(gl_pca$eig[3], digits=3)
+
+pc1_pc2 <- ggplot(PCA_data, aes(x=PC1, y=PC2, colour=species_id)) +
+  geom_point(size=3) +
+# geom_point(data=PCA_data[PCA_data$site=="Twelve_Mile_Peg",], aes(x=PC1, y=PC2), shape=3, size=3, colour="black") +
+ scale_colour_manual(values = pal_color) +
+   theme_bw() + theme(legend.title=element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x = paste0("PC1 (eig-",eig_1,")"), y = paste0("PC2 (eig-",eig_2,")"))
+  
+L_pc1_pc2 <- ggplot(PCA_data, aes(x=PC1, y=PC2)) +
+  geom_point(size=1) +
+geom_point(data=PCA_data[!is.na(PCA_data$lineage),], aes(x=PC1, y=PC2, colour= lineage), size=4) +
+# geom_point(data=PCA_data[PCA_data$site=="Twelve_Mile_Peg",], aes(x=PC1, y=PC2), shape=3, size=3, colour="black") +
+ scale_colour_manual(values = pal_color) +
+   theme_bw() + theme(legend.title=element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x = paste0("PC1 (eig-",eig_1,")"), y = paste0("PC2 (eig-",eig_2,")"))
+
+pc2_pc3 <- ggplot(PCA_data, aes(x=PC2, y=PC3, colour=species_id)) +
+  geom_point(size=3) +
+# geom_point(data=PCA_data[PCA_data$site=="Twelve_Mile_Peg",], aes(x=PC1, y=PC2), shape=3, size=3, colour="black") +
+ scale_colour_manual(values = pal_color) +
+   theme_bw() + theme(legend.title=element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x = paste0("PC2 (eig-",eig_2,")"), y = paste0("PC3 (eig-",eig_3,")"))
+  
+L_pc2_pc3 <- ggplot(PCA_data, aes(x=PC2, y=PC3)) +
+  geom_point(size=1) +
+geom_point(data=PCA_data[!is.na(PCA_data$lineage),], aes(x=PC2, y=PC3, colour= lineage), size=4) +
+# geom_point(data=PCA_data[PCA_data$site=="Twelve_Mile_Peg",], aes(x=PC1, y=PC2), shape=3, size=3, colour="black") +
+ scale_colour_manual(values = pal_color) +
+   theme_bw() + theme(legend.title=element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x = paste0("PC2 (eig-",eig_2,")"), y = paste0("PC3 (eig-",eig_3,")"))
+  
+
+pc1_2_3 <- wrap_plots(pc1_pc2, L_pc1_pc2, pc2_pc3,L_pc2_pc3, ncol = 2, nrow=2) # Change the number of columns as desired
+ggsave(paste0(basedir,species,"/popgen/",dmv3$treatment,"/genlight/PCA.pdf"), device="pdf",
+       plot = pc1_2_3, width = 40, height = 30, units = "cm")
+
+#dmv3$treatment <- "raw_FLineage_DG20.5163_SNPFilt_1SNPperClone"
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+run_SNMF_10 <- function(lea_file, basedir, species, dataset, treatment) {
+
+   require(LEA)
+
+   if (file.exists(lea_file)) {
+
+      cat("LEA file", lea_file, "exists, preparing to run \n")
+ 
+   } else {
+      cat("Fatal error: the LEA file ", lea_file, " does not exist \n"); stop();
+   }
+
+   dir <- paste(basedir, species, "/popgen",sep="")
+   if(!dir.exists(dir)) {
+      cat("  Directory: ", dir, " does not exist and is being created. \n")
+      dir.create(dir)
+   } else {
+      cat("  Directory: ", dir, " already exists... content might be overwritten. \n")
+   }
+
+   dir <- paste(basedir, species, "/popgen/",treatment,sep="")
+
+   if(!dir.exists(dir)) {
+      cat("  Directory: ", dir, " does not exist and is being created. \n")
+      dir.create(dir)
+   } else {
+      cat("  Directory: ", dir, " already exists...  \n")
+   }
+
+   lea_dir    <- paste(basedir,species,"/popgen/",treatment,"/lea", sep="")
+   
+   if(!dir.exists(lea_dir)) {
+      cat("  LEA directory: ", lea_dir, " does not exist and is being created. \n")
+      dir.create(lea_dir)
+   } else {
+      cat("  LEA directory: ", lea_dir, " already exists, content will be overwritten. \n")
+   }
+
+   out_file   <- paste(lea_dir,"/",species,"_",dataset,"_LEA.rda",sep="")
+   lea_plot   <- paste(lea_dir,"/",species,"_",dataset,"_LEA_K.pdf",sep="")
+
+   snmfK20R10=snmf(lea_file, K=1:10, entropy = TRUE, repetitions = 10, project = "new")
+   pdf(file=lea_plot)
+   plot(snmfK20R10, lwd = 5, col = "red", pch=1)
+   dev.off()
+
+   save(snmfK20R10, file=out_file)
+
+   return(out_file)
+}
+```
+
+
